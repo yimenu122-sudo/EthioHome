@@ -1,0 +1,19 @@
+{
+  "welcome": "Welcome to EthioHome",
+  "login_success": "Login successful",
+  "register_success": "Registration successful",
+  "invalid_credentials": "Invalid phone number or password",
+  "unauthorized": "Unauthorized access. Please log in.",
+  "forbidden": "Access denied. Insufficient permissions.",
+  "not_found": "Resource not found",
+  "internal_error": "An internal server error occurred",
+  "property_created": "Property listing created successfully",
+  "property_updated": "Property updated successfully",
+  "property_deleted": "Property deleted successfully",
+  "booking_request_sent": "Visit request sent successfully",
+  "booking_approved": "Booking has been approved",
+  "payment_initiated": "Payment process initiated",
+  "payment_success": "Payment verified and completed",
+  "identity_verified": "Identity verification documents submitted",
+  "validation_error": "Input validation failed"
+}

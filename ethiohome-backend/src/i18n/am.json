@@ -1,0 +1,19 @@
+{
+  "welcome": "እንኳን ወደ ኢትዮሆም በደህና መጡ",
+  "login_success": "መግባት በተሳካ ሁኔታ ተጠናቅቋል",
+  "register_success": "ምዝገባው በተሳካ ሁኔታ ተጠናቅቋል",
+  "invalid_credentials": "የተሳሳተ ስልክ ቁጥር ወይም የይለፍ ቃል",
+  "unauthorized": "ያልተፈቀደ መግቢያ። እባክዎ ይግቡ።",
+  "forbidden": "መግባት አልተፈቀደም። በቂ ፈቃድ የለዎትም።",
+  "not_found": "መረጃው አልተገኘም",
+  "internal_error": "ውስጣዊ የሰርቨር ስህተት ተከስቷል",
+  "property_created": "የቤት ዝርዝሩ በተሳካ ሁኔታ ተፈጥሯል",
+  "property_updated": "የቤት መረጃው ታድሷል",
+  "property_deleted": "የቤት መረጃው ተሰርዟል",
+  "booking_request_sent": "ጉብኝት የማድረጊያ ጥያቄው ተልኳል",
+  "booking_approved": "መዝገቡ ጸድቋል",
+  "payment_initiated": "የክፍያ ሂደት ተጀምሯል",
+  "payment_success": "ክፍያው ተረጋግጧል",
+  "identity_verified": "የማንነት ማረጋገጫ ሰነዶች ገብተዋል",
+  "validation_error": "የመረጃ ማረጋገጫ ስህተት"
+}
