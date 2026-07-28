@@ -20,6 +20,9 @@ router.delete('/me', userController.deleteAccount);
 router.put('/me/language', userController.updateLanguage);
 router.put('/me/password', userController.changePassword);
 
+const { handleSingleUpload } = require('../middlewares/upload.middleware');
+router.post('/me/image', handleSingleUpload, userController.uploadProfileImage);
+
 // Identity verification restricted to Owner and Agent
 router.post('/me/verify-identity', 
   role([ROLES.OWNER, ROLES.AGENT]), 

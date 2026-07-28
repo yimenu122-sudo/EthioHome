@@ -1,5 +1,6 @@
 const { DataTypes } = require('sequelize');
 const { sequelize } = require('../config/db');
+const { getEthiopianDateObject } = require('../utils/ethiopianCalendar');
 
 /**
  * @file booking.model.js
@@ -60,8 +61,20 @@ const Booking = sequelize.define('Booking', {
     allowNull: false
   },
   booking_status: {
-    type: DataTypes.ENUM('Pending', 'Approved', 'Cancelled'),
+    type: DataTypes.ENUM('Pending', 'Owner_Pending', 'Negotiating', 'Approved', 'Cancelled', 'Completed'),
     defaultValue: 'Pending'
+  },
+  negotiated_price: {
+    type: DataTypes.DECIMAL(15, 2),
+    allowNull: true
+  },
+  visit_date_ec: {
+    type: DataTypes.VIRTUAL,
+    get() {
+      const visitDate = this.getDataValue('visit_date');
+      if (!visitDate) return null;
+      return getEthiopianDateObject(visitDate);
+    }
   }
 }, {
   tableName: 'bookings',

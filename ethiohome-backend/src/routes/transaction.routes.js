@@ -17,5 +17,6 @@ router.post('/', auth, authorize('Owner', 'Agent', 'Admin'), transactionControll
  * @access Private
  */
 router.get('/my', auth, transactionController.getMyTransactions);
+router.post('/confirm/:id', auth, transactionController.confirmAgreement);
 
 module.exports = router;

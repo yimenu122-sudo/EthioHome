@@ -2,6 +2,7 @@
  * @file server.js
  * @description Server Bootstrap – Entry Point for EthioHome Backend
  * @author Senior Node.js Developer
+ * @note Port 5003 conflicts cleared automatically again.
  */
 
 const http = require('http');
@@ -10,6 +11,7 @@ const app = require('./app');
 const { PORT, NODE_ENV } = require('./config/env');
 const { connectDB, sequelize } = require('./config/db');
 const socketHandler = require('./sockets/chat.socket');
+const { initCronJobs } = require('./utils/cron');
 
 /**
  * 1️⃣ SERVER INITIALIZATION
@@ -37,6 +39,9 @@ const bootstrap = async () => {
     
     // Connect to PostgreSQL via Sequelize
     await connectDB();
+    
+    // Init Cron Jobs
+    initCronJobs();
     
     // Start Listening for HTTP Requests
     server.listen(PORT, () => {
@@ -91,24 +96,48 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // Handle unhandled Promise rejections
 process.on('unhandledRejection', (err) => {
+  const errMsg = err && (err.message || String(err));
+  const errCode = err && err.code;
+
+  if (errCode === 'ERR_STREAM_PREMATURE_CLOSE' || (errMsg && errMsg.includes('Premature close'))) {
+    console.warn('⚠️  Promise premature close detected (Client disconnected). Ignoring to prevent server crash.');
+    return;
+  }
+
   console.error('UNHANDLED REJECTION! 💥 Shutting down...');
-  console.error(`Error: ${err.name} - ${err.message}`);
+  console.error(`Error: ${err ? err.name : 'Unknown'} - ${errMsg}`);
+  if (err && err.stack) console.error(err.stack);
+  
   // Give server time to finish current requests before shutting down
   gracefulShutdown('UNHANDLED_REJECTION');
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
+  const errMsg = err && (err.message || String(err));
+  const errCode = err && err.code;
+
   // Gracefully handle Premature Close (client disconnect mid-stream)
-  if (err.code === 'ERR_STREAM_PREMATURE_CLOSE' || err.message.includes('Premature close')) {
+  if (errCode === 'ERR_STREAM_PREMATURE_CLOSE' || (errMsg && errMsg.includes('Premature close'))) {
     console.warn('⚠️  Stream premature close detected (Client disconnected). Ignoring to prevent server crash.');
     return;
   }
 
   console.error('UNCAUGHT EXCEPTION! 💥 Shutting down...');
-  console.error(`Error: ${err.name} - ${err.message}`);
-  console.error(err.stack);
-  process.exit(1);
+  console.error(`Error: ${err ? err.name : 'Unknown'} - ${errMsg}`);
+  if (err && err.stack) console.error(err.stack);
+  
+  // Attempt to close server before exiting to prevent EADDRINUSE on restart
+  if (server && server.listening) {
+    server.close(() => {
+      console.log('✅ Server closed after exception.');
+      process.exit(1);
+    });
+    // Force exit if close takes too long
+    setTimeout(() => process.exit(1), 3000);
+  } else {
+    process.exit(1);
+  }
 });
 
 // Start the application

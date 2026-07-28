@@ -41,6 +41,9 @@ const Property = sequelize.define('Property', {
   kebele: {
     type: DataTypes.STRING(50)
   },
+  house_number: {
+    type: DataTypes.STRING(50)
+  },
   specific_location: {
     type: DataTypes.TEXT,
     allowNull: false
@@ -50,7 +53,7 @@ const Property = sequelize.define('Property', {
     allowNull: false
   },
   property_type: {
-    type: DataTypes.STRING(50),
+    type: DataTypes.ENUM('House', 'Apartment', 'Villa', 'Studio', 'Commercial', 'Office', 'Shop', 'Land', 'Other'),
     allowNull: false
   },
   listing_type: {
@@ -65,17 +68,29 @@ const Property = sequelize.define('Property', {
     type: DataTypes.INTEGER,
     allowNull: false
   },
+  bedroom_area_size: {
+    type: DataTypes.DECIMAL(10, 2)
+  },
   number_of_bathrooms: {
     type: DataTypes.INTEGER,
     allowNull: false
+  },
+  bathroom_area_size: {
+    type: DataTypes.DECIMAL(10, 2)
   },
   number_of_living_rooms: {
     type: DataTypes.INTEGER,
     defaultValue: 1
   },
+  living_room_area_size: {
+    type: DataTypes.DECIMAL(10, 2)
+  },
   number_of_kitchens: {
     type: DataTypes.INTEGER,
     defaultValue: 1
+  },
+  kitchen_area_size: {
+    type: DataTypes.DECIMAL(10, 2)
   },
   number_of_floors: {
     type: DataTypes.INTEGER,
@@ -87,7 +102,23 @@ const Property = sequelize.define('Property', {
   },
   availability_status: {
     type: DataTypes.ENUM('Available', 'Rented', 'Sold', 'Unavailable'),
-    defaultValue: 'Available'
+    defaultValue: 'Unavailable'
+  },
+  verification_status: {
+    type: DataTypes.ENUM('Pending', 'Under_Review', 'Verified', 'Rejected'),
+    defaultValue: 'Pending'
+  },
+  verified_by: {
+    type: DataTypes.UUID,
+    allowNull: true
+  },
+  verified_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  rejection_reason: {
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
   tableName: 'properties',

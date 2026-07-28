@@ -3,9 +3,14 @@
  * @description Controller for Agent Module operations in EthioHome
  */
 
-const { Property, Booking, Commission, Transaction, User } = require('../models/associations');
+const { Property, Booking, Commission, Transaction, User, PropertyDocument } = require('../models/associations');
+const CityModel = require('../models/city.model');
+const SubCityModel = require('../models/sub_city.model');
+
 const { successResponse, errorResponse } = require('../utils/response');
 const { Op } = require('sequelize');
+const NotificationService = require('../services/notification.service');
+const { pool } = require('../config/db');
 
 /**
  * Get Agent Dashboard Statistics
@@ -233,6 +238,43 @@ exports.updatePropertyStatus = async (req, res) => {
 };
 
 /**
+ * Update Property Verification Status (Agent Action)
+ */
+exports.updateVerificationStatus = async (req, res) => {
+  try {
+    const { property_id } = req.params;
+    const { status, rejection_reason } = req.body;
+    const agent_id = req.user.id;
+
+    const allowedStatuses = ['Pending', 'Under_Review', 'Verified', 'Rejected'];
+    if (!allowedStatuses.includes(status)) {
+       return errorResponse(res, 'Invalid verification status', 400);
+    }
+
+    const property = await Property.findOne({ where: { property_id, agent_id } });
+    if (!property) return errorResponse(res, 'Property not found or access denied', 404);
+
+    const updateData = { 
+      verification_status: status,
+      verified_by: agent_id,
+      verified_at: new Date()
+    };
+    
+    if (status === 'Rejected') {
+      updateData.rejection_reason = rejection_reason || 'No reason provided';
+    } else {
+      updateData.rejection_reason = null;
+    }
+
+    await property.update(updateData);
+
+    return successResponse(res, property, `Property verification status updated to ${status}`);
+  } catch (error) {
+    return errorResponse(res, 'Failed to update verification status', 500, error.message);
+  }
+};
+
+/**
  * Get Specific Property Details for Agent
  * Business Rule: Assigned agent AND city restriction
  */
@@ -303,68 +345,105 @@ exports.addProperty = async (req, res) => {
       owner_id,
       title,
       description,
+      city,
       sub_city,
       woreda,
       kebele,
+      house_number,
       specific_location,
       price,
       property_type,
       listing_type,
       number_of_bedrooms,
+      bedroom_area_size,
       number_of_bathrooms,
+      bathroom_area_size,
       number_of_living_rooms,
+      living_room_area_size,
       number_of_kitchens,
+      kitchen_area_size,
       number_of_floors,
       area_size
     } = req.body;
 
-    const property_image = req.file ? req.file.path : null;
+    const property_image = req.files && req.files.image ? req.files.image[0].path : null;
+    const house_plan_url = req.files && req.files.house_plan ? req.files.house_plan[0].path : null;
 
     if (!property_image) {
       return errorResponse(res, 'Main property image is required', 400);
     }
 
-    // 2. Validate Owner city & role
+    // 2. Validate Owner role
     const owner = await User.findOne({
       where: {
         user_id: owner_id,
-        role: 'Owner',
-        city: agent.city
+        role: 'Owner'
       }
     });
 
     if (!owner) {
-      return errorResponse(res, 'Invalid owner or owner is not in your city', 400);
+      return errorResponse(res, 'Invalid owner. User must have the Owner role.', 400);
     }
 
+    const propertyCity = city || agent.city || 'Addis Ababa';
+    
     // 3. Create Property
     const property = await Property.create({
       owner_id,
       agent_id,
       title,
       description,
-      city: agent.city, // Hard-enforced to agent's city
+      city: propertyCity,
       sub_city,
       woreda,
       kebele,
+      house_number, // Optional
       specific_location,
-      price,
+      price: parseFloat(price) || 0,
       property_type,
       listing_type,
       property_image,
       number_of_bedrooms: parseInt(number_of_bedrooms) || 0,
+      bedroom_area_size: parseFloat(bedroom_area_size) || 0,
       number_of_bathrooms: parseInt(number_of_bathrooms) || 0,
+      bathroom_area_size: parseFloat(bathroom_area_size) || 0,
       number_of_living_rooms: parseInt(number_of_living_rooms) || 0,
+      living_room_area_size: parseFloat(living_room_area_size) || 0,
       number_of_kitchens: parseInt(number_of_kitchens) || 0,
+      kitchen_area_size: parseFloat(kitchen_area_size) || 0,
       number_of_floors: parseInt(number_of_floors) || 0,
       area_size: parseFloat(area_size) || 0,
       availability_status: 'Available'
     });
 
+    // 4. Create Property Document if house_plan uploaded
+    if (house_plan_url) {
+      try {
+        await PropertyDocument.create({
+          property_id: property.property_id,
+          house_plan_url: house_plan_url,
+          uploaded_by: agent_id,
+          is_verified: false,
+          verified_by: null,
+          verified_at: null
+        });
+      } catch (docErr) {
+        console.warn('⚠️ PropertyDocument creation failed, but property was created:', docErr.message);
+      }
+    }
+
     return successResponse(res, property, 'Property added successfully', 201);
 
   } catch (error) {
-    console.error('Add Property Error:', error);
+    console.error('❌ [Agent] addProperty Full Error Object:', JSON.stringify(error, null, 2));
+    console.error('❌ Error Message:', error.message);
+
+    // Check for specific Sequelize errors
+    if (error.name === 'SequelizeValidationError') {
+      const details = error.errors.map(e => e.message).join(', ');
+      return errorResponse(res, `Validation Error: ${details}`, 400);
+    }
+
     return errorResponse(res, 'Failed to add property', 500, error.message);
   }
 };
@@ -395,6 +474,8 @@ exports.updateProperty = async (req, res) => {
     delete updateData.agent_id;
     delete updateData.owner_id;
     delete updateData.city;
+    delete updateData.sub_city;
+
 
     await property.update(updateData);
 
@@ -430,14 +511,24 @@ exports.getBookings = async (req, res) => {
       include: [
         {
           model: Property,
-          where: { city: agent.city }, // ENFORCE CITY RESTRICTION
-          attributes: ['title', 'city', 'price', 'property_image', 'listing_type']
+          where: { city: agent.city },
+          attributes: ['title', 'city', 'price', 'property_image', 'listing_type'],
+          include: [
+            {
+              model: User,
+              as: 'owner',
+              attributes: ['first_name', 'last_name', 'phone_number', 'email']
+            }
+          ]
+        },
+        {
+          model: User,
+          as: 'buyerRenter',
+          attributes: ['first_name', 'last_name', 'phone_number', 'email', 'role']
         }
       ],
       attributes: [
-        'booking_id', 'property_id', 'owner_id', 'agent_id',
-        'buyer_tenant_first_name', 'buyer_tenant_last_name', 
-        'buyer_tenant_phone', 'buyer_tenant_role',
+        'booking_id', 'property_id', 'owner_id', 'agent_id', 'buyer_renter_id',
         'visit_date', 'message', 'booking_status'
       ],
       order: [['visit_date', 'ASC']]
@@ -465,22 +556,173 @@ exports.updateBookingStatus = async (req, res) => {
       return errorResponse(res, 'Invalid status transition', 400);
     }
 
-    const booking = await Booking.findOne({
-      where: { booking_id: id, agent_id }
+    // 1. Find the booking first to check existence
+    const booking = await Booking.findByPk(id, {
+      include: [
+        { model: Property, attributes: ['title', 'owner_id', 'city'] },
+        { model: User, as: 'buyerRenter', attributes: ['first_name', 'last_name', 'email'] }
+      ]
     });
 
     if (!booking) {
-      return errorResponse(res, 'Booking not found or access denied', 404);
+      return errorResponse(res, 'Booking not found', 404);
     }
 
-    await booking.update({ booking_status: status });
+    // 2. Access Control: Ensure the agent is actually assigned
+    if (booking.agent_id !== agent_id) {
+      return errorResponse(res, 'Unauthorised: You are not the assigned agent for this booking', 403);
+    }
 
-    // TODO: Trigger notifications for the user
+    const previousStatus = booking.booking_status;
     
-    return successResponse(res, booking, `Booking status updated to ${status}`);
+    // Logic: Agent approval starts the negotiation phase
+    const newStatus = status === 'Approved' ? 'Negotiating' : status;
+    await booking.update({ booking_status: newStatus });
+
+    // Handle Advanced Workflow for Approval
+    if (status === 'Approved' && previousStatus === 'Pending') {
+      try {
+        const propertyTitle = booking.Property?.title || 'the property';
+        
+        // 1. Notify Client (Buyer/Renter)
+        if (booking.buyerRenter) {
+          await NotificationService.sendInAppNotification(
+            booking.buyer_renter_id,
+            'Visit Approved',
+            `Your visit for "${propertyTitle}" has been approved by the agent.`,
+            'Booking',
+            booking.booking_id
+          );
+          
+          await NotificationService.sendEmail(
+            booking.buyerRenter.email,
+            'Appointment Approved - EthioHome',
+            `
+            <div style="font-family: sans-serif; padding: 20px; color: #333;">
+              <h2 style="color: #2E7D32;">Appointment Approved!</h2>
+              <p>Hello <strong>${booking.buyerRenter.first_name}</strong>,</p>
+              <p>Great news! Your appointment to visit <strong>"${propertyTitle}"</strong> has been approved by our agent.</p>
+              <p>You can now coordinate directly with the agent through the in-app chat to finalize the viewing time.</p>
+              <br/>
+              <p>Best regards,<br/>The EthioHome Team</p>
+            </div>
+            `
+          );
+        }
+
+        // 2. Notify Owner
+        const owner = await User.findByPk(booking.Property.owner_id);
+        if (owner) {
+          await NotificationService.sendInAppNotification(
+            owner.user_id,
+            'Visit Scheduled',
+            `An agent has approved a visit for your property: ${propertyTitle}.`,
+            'Property',
+            booking.property_id
+          );
+
+          if (owner.email) {
+            await NotificationService.sendEmail(
+              owner.email,
+              'Property Visit Scheduled - EthioHome',
+              `
+              <div style="font-family: sans-serif; padding: 20px; color: #333;">
+                <h2 style="color: #2E7D32;">New Visit Scheduled</h2>
+                <p>Hello <strong>${owner.first_name}</strong>,</p>
+                <p>An agent has approved a viewing request for your property: <strong>"${propertyTitle}"</strong>.</p>
+                <p>The agent will coordinate the visit with the prospective client. You will be notified of any further updates.</p>
+                <br/>
+                <p>Best regards,<br/>The EthioHome Team</p>
+              </div>
+              `
+            );
+          }
+        }
+
+        // 3. Seed Chat Conversation (Welcome Message)
+        const welcomeMsg = `Hello! I have approved your visit request for "${propertyTitle}". Let's coordinate a suitable time for the viewing.`;
+        await pool.query(
+          `INSERT INTO chat_messages (sender_id, receiver_id, message_text, is_read, created_at) 
+           VALUES ($1, $2, $3, false, NOW())`,
+          [agent_id, booking.buyer_renter_id, welcomeMsg]
+        );
+
+      } catch (notifyErr) {
+        console.error('Workflow background error:', notifyErr);
+      }
+    } else if (status === 'Cancelled' && previousStatus !== 'Cancelled') {
+      try {
+        const propertyTitle = booking.Property?.title || 'the property';
+        if (booking.buyerRenter) {
+          await NotificationService.sendInAppNotification(
+            booking.buyer_renter_id,
+            'Visit Cancelled',
+            `Your visit for "${propertyTitle}" has been cancelled by the agent.`,
+            'Booking',
+            booking.booking_id
+          );
+          
+          await NotificationService.sendEmail(
+            booking.buyerRenter.email,
+            'Appointment Cancelled - EthioHome',
+            `
+            <div style="font-family: sans-serif; padding: 20px; color: #333;">
+              <h2 style="color: #D32F2F;">Appointment Cancelled</h2>
+              <p>Hello <strong>${booking.buyerRenter.first_name}</strong>,</p>
+              <p>Your appointment to visit <strong>"${propertyTitle}"</strong> has been cancelled by our agent.</p>
+              <p>If you have any questions, please reach out to the agent.</p>
+              <br/>
+              <p>Best regards,<br/>The EthioHome Team</p>
+            </div>
+            `
+          );
+        }
+      } catch (notifyErr) {
+        console.error('Workflow background error on cancel:', notifyErr);
+      }
+    }
+
+    return successResponse(res, booking, `Booking status updated to ${newStatus}`);
   } catch (error) {
     console.error('Update Booking Status Error:', error);
-    return errorResponse(res, 'Failed to update booking status', 500);
+    return errorResponse(res, 'Failed to update booking status', 500, error.message);
+  }
+};
+
+/**
+ * Send Booking/Offer to Owner for Approval
+ */
+exports.sendToOwner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const agent_id = req.user.id;
+
+    const booking = await Booking.findByPk(id, {
+      include: [
+        { model: Property, attributes: ['title', 'owner_id'] },
+        { model: User, as: 'buyerRenter', attributes: ['first_name', 'last_name'] }
+      ]
+    });
+
+    if (!booking) return errorResponse(res, 'Booking not found', 404);
+    if (booking.agent_id !== agent_id) return errorResponse(res, 'Unauthorized', 403);
+
+    // Update status to Owner_Pending
+    await booking.update({ booking_status: 'Owner_Pending' });
+
+    // Notify Owner
+    await NotificationService.sendInAppNotification(
+      booking.Property.owner_id,
+      'New Offer Received',
+      `An agent has sent you a new booking request for "${booking.Property.title}". Please review it in your offers.`,
+      'Booking',
+      booking.booking_id
+    );
+
+    return successResponse(res, booking, 'Offer sent to owner for approval');
+  } catch (error) {
+    console.error('Send to Owner Error:', error);
+    return errorResponse(res, 'Failed to send offer to owner', 500);
   }
 };
 
@@ -507,8 +749,9 @@ exports.getCommissions = async (req, res) => {
           include: [
             {
               model: Property,
+              as: 'Property',
               where: { city: agent.city },
-              attributes: ['title', 'property_image', 'city']
+              attributes: ['title', 'property_image', 'city', 'property_type']
             }
           ],
           attributes: ['transaction_type', 'agreed_price', 'contract_date']

@@ -18,9 +18,9 @@ router.get('/agent/:agentId', reviewController.getAgentReviews);
 // Protected Routes
 router.use(auth);
 
-// Add Review - Renters/Buyers only
+// Add Review - Renters/Buyers/Owners only
 router.post('/', 
-  role([ROLES.RENTER, ROLES.BUYER]), 
+  role([ROLES.RENTER, ROLES.BUYER, ROLES.OWNER]), 
   reviewController.addReview
 );
 

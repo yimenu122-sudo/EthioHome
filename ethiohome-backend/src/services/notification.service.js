@@ -32,19 +32,21 @@ class NotificationService {
   /**
    * Send in-app notification
    */
-  async sendInAppNotification(userId, bookingId, type, lang = 'en') {
-    const messageInfo = MESSAGES[type] || { en: 'Update on your account', am: 'በመለያዎ ላይ አዲስ መረጃ አለ' };
-    
-    const notification = await Notification.create({
-      user_id: userId,
-      booking_id: bookingId,
-      title: type,
-      message: messageInfo[lang] || messageInfo.en,
-      is_sent: true,
-      sent_at: new Date()
-    });
-
-    return notification;
+  async sendInAppNotification(userId, title, message, type, bookingId) {
+    try {
+      const notification = await Notification.create({
+        user_id: userId,
+        booking_id: bookingId,
+        title: title,
+        message: message,
+        is_sent: true,
+        sent_at: new Date()
+      });
+      return notification;
+    } catch (error) {
+      console.error(`[In-App Notification Error]: ${error.message}`);
+      return null;
+    }
   }
 
   /**

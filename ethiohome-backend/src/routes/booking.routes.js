@@ -36,6 +36,9 @@ router.put('/:id/status',
   bookingController.updateStatus
 );
 
+// Negotiate price/terms - Client, Owner, or Agent
+router.put('/:id/negotiate', bookingController.updateNegotiation);
+
 // Reschedule booking - User who made it
 router.patch('/:id', bookingController.rescheduleBooking);
 

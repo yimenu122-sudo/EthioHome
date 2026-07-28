@@ -24,6 +24,11 @@ const Review = sequelize.define('Review', {
     allowNull: false,
     comment: 'Can be property_id or agent_id/owner_id'
   },
+  target_type: {
+    type: DataTypes.ENUM('Property', 'Agent', 'Owner'),
+    allowNull: false,
+    defaultValue: 'Property'
+  },
   rating: {
     type: DataTypes.INTEGER,
     allowNull: false,

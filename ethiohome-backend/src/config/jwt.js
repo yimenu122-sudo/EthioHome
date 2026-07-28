@@ -28,6 +28,7 @@ const generateToken = (user) => {
       email: user.email,
       role: user.role,
       phone: user.phone,
+      city: user.city,
     },
     jwtConfig.secret,
     {

@@ -11,19 +11,21 @@ const { successResponse, errorResponse } = require('../utils/response');
  */
 exports.addReview = async (req, res) => {
   try {
-    const { target_id, rating, comment } = req.body;
+    const { target_id, target_type, rating, comment } = req.body;
 
     // Logic to verify if reviewer has completed a transaction/booking with this target
     
     const review = await Review.create({
       reviewer_id: req.user.id,
       target_id,
+      target_type: target_type || 'Property',
       rating,
       comment
     });
 
     return successResponse(res, review, 'Review added successfully', 201);
   } catch (error) {
+    console.error('Add Review Error:', error);
     return errorResponse(res, 'Failed to add review', 500);
   }
 };

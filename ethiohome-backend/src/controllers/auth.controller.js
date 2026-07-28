@@ -162,13 +162,13 @@ exports.loginInit = async (req, res) => {
     // 1. Find user
     const user = await User.findByIdentifier(identifier);
     if (!user) {
-      return errorResponse(res, "Invalid credentials", 401);
+      return errorResponse(res, req.language === "am" ? "የተሳሳተ መረጃ" : "Invalid credentials", 401);
     }
 
     // 2. Verify password
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
-      return errorResponse(res, "Invalid credentials", 401);
+      return errorResponse(res, req.language === "am" ? "የተሳሳተ መረጃ" : "Invalid credentials", 401);
     }
 
     // 3. Generate 6-digit OTP
@@ -234,14 +234,14 @@ exports.verifyLoginOTP = async (req, res) => {
     // 1. Find active OTP
     const activeOtp = await OTPVerification.findLatestActive(userId);
     if (!activeOtp) {
-      return errorResponse(res, "Code expired or invalid", 400);
+      return errorResponse(res, req.language === "am" ? "ኮድ ጊዜው አልፎበታል" : "Code expired or invalid", 400);
     }
 
     // 2. Verify OTP
     const isMatch = await bcrypt.compare(otp, activeOtp.otp_hash);
     if (!isMatch) {
       await OTPVerification.incrementAttempts(activeOtp.otp_id);
-      return errorResponse(res, "Invalid verification code", 400);
+      return errorResponse(res, req.language === "am" ? "የተሳሳተ ኮድ" : "Invalid verification code", 400);
     }
 
     // 3. Get User
@@ -261,7 +261,8 @@ exports.verifyLoginOTP = async (req, res) => {
       id: user.user_id,
       email: user.email,
       role: user.role,
-      phone: user.phone_number
+      phone: user.phone_number,
+      city: user.city
     });
     const refreshToken = generateRefreshToken(user.user_id);
 
@@ -276,6 +277,7 @@ exports.verifyLoginOTP = async (req, res) => {
           first_name: user.first_name,
           last_name: user.last_name,
           role: user.role,
+          city: user.city,
           is_verified: user.is_verified,
         },
         token,
@@ -373,7 +375,8 @@ exports.refreshToken = async (req, res) => {
       id: user.user_id,
       email: user.email,
       role: user.role,
-      phone: user.phone_number
+      phone: user.phone_number,
+      city: user.city
     });
     return successResponse(res, { token: newToken }, "Token refreshed");
   } catch (error) {
@@ -639,7 +642,7 @@ exports.registerAdmin = async (req, res) => {
 
     // 5. Log the initialization event (Audit Log)
     const AuditLog = require("../models/audit_log.model");
-    await AuditLog.log({
+    await AuditLog.create({
       admin_id: admin.user_id,
       action: 'SYSTEM_INITIALIZATION',
       table_name: 'users',
@@ -775,8 +778,14 @@ exports.loginGuest = async (req, res) => {
     }
 
     // 6. Generate Token
-    const token = generateToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const token = generateToken({
+      id: user.user_id,
+      email: user.email,
+      role: user.role,
+      phone: user.phone_number,
+      city: user.city
+    });
+    const refreshToken = generateRefreshToken(user.user_id);
 
     // 7. Update Last Login
     await User.updateLastLogin(user.user_id);
@@ -846,8 +855,14 @@ exports.googleLogin = async (req, res) => {
     }
 
     // 3. Generate Token
-    const token = generateToken(user);
-    const refreshToken = generateRefreshToken(user);
+    const token = generateToken({
+      id: user.user_id,
+      email: user.email,
+      role: user.role,
+      phone: user.phone_number,
+      city: user.city
+    });
+    const refreshToken = generateRefreshToken(user.user_id);
     await User.updateLastLogin(user.user_id);
 
     return successResponse(res, {

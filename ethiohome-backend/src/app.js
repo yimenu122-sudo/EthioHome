@@ -52,8 +52,8 @@ app.use(cors({
 app.use(morgan('combined'));
 
 // 5. Body Parsers
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // 6. Static Files Assets
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

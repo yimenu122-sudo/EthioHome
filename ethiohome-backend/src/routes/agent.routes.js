@@ -38,6 +38,12 @@ router.get('/properties/:id', agentController.getAgentPropertyDetails);
 router.patch('/properties/:property_id/status', agentController.updatePropertyStatus);
 
 /**
+ * @route PATCH /api/v1/agent/properties/:property_id/verify
+ * @desc Update property verification status
+ */
+router.patch('/properties/:property_id/verify', agentController.updateVerificationStatus);
+
+/**
  * @route GET /api/v1/agent/owners/search
  * @desc Search for owners to assign to a property
  */
@@ -53,8 +59,8 @@ router.post('/properties/assign-owner', agentController.assignOwner);
  * @route POST /api/v1/agent/properties
  * @desc Add a new property listing
  */
-const { handleSingleUpload } = require('../middlewares/upload.middleware');
-router.post('/properties', handleSingleUpload, agentController.addProperty);
+const { handlePropertyUpload } = require('../middlewares/upload.middleware');
+router.post('/properties', handlePropertyUpload, agentController.addProperty);
 
 /**
  * @route PUT /api/v1/agent/properties/:id
@@ -75,10 +81,24 @@ router.get('/bookings', agentController.getBookings);
 router.patch('/bookings/:id', agentController.updateBookingStatus);
 
 /**
+ * @route POST /api/v1/agent/bookings/:id/send-to-owner
+ * @desc Send offer to owner for approval
+ */
+router.post('/bookings/:id/send-to-owner', agentController.sendToOwner);
+
+/**
  * @route GET /api/v1/agent/commissions
  * @desc Get agent earnings and payouts
  */
 router.get('/commissions', agentController.getCommissions);
+
+const transactionAgentController = require('../controllers/agent/transaction.agent.controller');
+
+// Transaction & Commission Management
+router.get('/transactions', transactionAgentController.getTransactions);
+router.get('/transactions/analytics', transactionAgentController.getTransactionAnalytics);
+router.get('/transactions/export/csv', transactionAgentController.exportCSV);
+router.get('/transactions/export/excel', transactionAgentController.exportExcel);
 
 /**
  * @route GET /api/v1/agent/clients

@@ -23,9 +23,14 @@ exports.getAllProperties = async (req, res) => {
       limit = 10 
     } = req.query;
 
-    const where = { availability_status: 'Available' };
+    const where = { 
+      availability_status: 'Available',
+      verification_status: 'Verified'
+    };
 
-    if (city) where.city = city;
+    if (city) {
+      where.city = city;
+    }
     if (listing_type) where.listing_type = listing_type;
     if (type) where.property_type = type;
     
@@ -79,11 +84,16 @@ exports.searchProperties = async (req, res) => {
 
     const where = { 
       availability_status: 'Available',
+      verification_status: 'Verified',
       listing_type: 'Sale' // Buyers module focuses on Sale properties
     };
 
-    if (city) where.city = city;
-    if (sub_city) where.sub_city = { [Op.iLike]: `%${sub_city}%` };
+    if (city) {
+      where.city = city;
+    }
+    if (sub_city) {
+      where.sub_city = { [Op.iLike]: `%${sub_city}%` };
+    }
     if (type) where.property_type = type;
     
     // Price Filter
@@ -143,8 +153,13 @@ exports.searchProperties = async (req, res) => {
  */
 exports.getPropertyById = async (req, res) => {
   try {
-    const { User } = require('../models/associations');
-    const property = await Property.findByPk(req.params.id, {
+    const { User, PropertyImage } = require('../models/associations');
+    const property = await Property.findOne({
+      where: {
+        property_id: req.params.id,
+        availability_status: 'Available',
+        verification_status: 'Verified'
+      },
       include: [
         { 
           model: User, 
@@ -155,6 +170,11 @@ exports.getPropertyById = async (req, res) => {
           model: User, 
           as: 'agent', 
           attributes: ['first_name', 'last_name', 'phone_number', 'profile_image'] 
+        },
+        {
+          model: PropertyImage,
+          as: 'images',
+          attributes: ['image_id', 'image_url', 'is_primary']
         }
       ]
     });

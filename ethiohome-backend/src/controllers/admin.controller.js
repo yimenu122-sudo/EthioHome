@@ -80,11 +80,24 @@ exports.getChartData = async (req, res) => {
       ORDER BY TO_CHAR(created_at, 'YYYY-MM') ASC
     `);
 
+    // 5. Revenue Trends
+    const revenueTrends = await pool.query(`
+      SELECT 
+        TO_CHAR(created_at, 'Mon') as month,
+        COALESCE(SUM(amount), 0) as revenue
+      FROM commissions
+      WHERE commission_status = 'Completed'
+      AND created_at >= NOW() - INTERVAL '6 months'
+      GROUP BY month, TO_CHAR(created_at, 'YYYY-MM')
+      ORDER BY TO_CHAR(created_at, 'YYYY-MM') ASC
+    `);
+
     return successResponse(res, {
       listingTrends: listingTrends.rows,
       cityDistribution: cityDistribution.rows,
       transactionTrends: transactionTrends.rows,
-      userTrends: userTrends.rows
+      userTrends: userTrends.rows,
+      revenueTrends: revenueTrends.rows
     }, "Chart data fetched successfully");
   } catch (error) {
     console.error("Admin Dashboard Charts Error:", error);
@@ -125,8 +138,8 @@ exports.getUsers = async (req, res) => {
     let query = `
       SELECT 
         user_id, first_name, last_name, phone_number, email, 
-        role, status, is_verified, preferred_language, last_login, 
-        profile_image, created_at
+        national_id, role, status, is_verified, preferred_language, 
+        last_login, profile_image, created_at
       FROM users 
       WHERE 1=1
     `;
@@ -156,6 +169,72 @@ exports.getUsers = async (req, res) => {
   } catch (error) {
     console.error("Get Users Error:", error);
     return errorResponse(res, "Failed to fetch users", 500);
+  }
+};
+
+/**
+ * GET /api/admin/users/export
+ * @description Export all users as a downloadable CSV file
+ */
+exports.exportUsersCSV = async (req, res) => {
+  try {
+    const { role, status, search } = req.query;
+    let query = `
+      SELECT 
+        user_id, first_name, last_name, phone_number, email,
+        role, status, is_verified, city, preferred_language,
+        last_login, created_at
+      FROM users
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (role) { params.push(role); query += ` AND role = $${params.length}`; }
+    if (status) { params.push(status); query += ` AND status = $${params.length}`; }
+    if (search) {
+      params.push(`%${search}%`);
+      query += ` AND (first_name ILIKE $${params.length} OR last_name ILIKE $${params.length} OR email ILIKE $${params.length} OR phone_number ILIKE $${params.length})`;
+    }
+    query += ' ORDER BY created_at DESC';
+
+    const result = await pool.query(query, params);
+    const users = result.rows;
+
+    // Build CSV
+    const headers = ['User ID', 'First Name', 'Last Name', 'Phone', 'Email', 'Role', 'Status', 'Verified', 'City', 'Language', 'Last Login', 'Joined Date'];
+    const escape = (val) => {
+      if (val === null || val === undefined) return '';
+      const str = String(val);
+      return str.includes(',') || str.includes('"') || str.includes('\n')
+        ? `"${str.replace(/"/g, '""')}"` : str;
+    };
+
+    const rows = users.map(u => [
+      escape(u.user_id),
+      escape(u.first_name),
+      escape(u.last_name),
+      escape(u.phone_number),
+      escape(u.email),
+      escape(u.role),
+      escape(u.status),
+      escape(u.is_verified ? 'Yes' : 'No'),
+      escape(u.city),
+      escape(u.preferred_language),
+      escape(u.last_login ? new Date(u.last_login).toISOString() : ''),
+      escape(new Date(u.created_at).toISOString()),
+    ].join(','));
+
+    const csv = [headers.join(','), ...rows].join('\r\n');
+    const filename = `ethiohome_users_${new Date().toISOString().slice(0, 10)}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-cache');
+    // UTF-8 BOM so Excel opens it correctly
+    return res.status(200).send('\uFEFF' + csv);
+  } catch (error) {
+    console.error('Export Users CSV Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to generate CSV' });
   }
 };
 

@@ -11,11 +11,15 @@
  *  - deletePropertyImage   DELETE /api/owner/properties/:id/images/:imageId
  */
 
-const { Property, Booking, Commission, Transaction, User, PropertyImage } = require('../models/associations');
+const { Property, Booking, Commission, Transaction, User, PropertyImage, PropertyDocument } = require('../models/associations');
 const SystemSetting = require('../models/system_setting.model');
+const CityModel = require('../models/city.model');
+const SubCityModel = require('../models/sub_city.model');
+
 const { successResponse, errorResponse } = require('../utils/response');
 const { Op, Sequelize } = require('sequelize');
 const cloudinary = require('../config/cloudinary');
+const NotificationService = require('../services/notification.service');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. GET OWNER DASHBOARD STATS
@@ -30,27 +34,22 @@ exports.getDashboardStats = async (req, res) => {
   try {
     const owner_id = req.user.id;
 
-    // 1a. Property status breakdown
-    const propertyStats = await Property.findAll({
-      where: { owner_id },
-      attributes: [
-        'availability_status',
-        [Sequelize.fn('COUNT', Sequelize.col('property_id')), 'count'],
-      ],
-      group: ['availability_status'],
-      raw: true, // Use raw for simple aggregation to avoid getDataValue issues
-    });
+    // 1a. Property stats (Direct counting for reliability)
+    const [total, available, rented, sold, verified] = await Promise.all([
+      Property.count({ where: { owner_id } }),
+      Property.count({ where: { owner_id, availability_status: 'Available' } }),
+      Property.count({ where: { owner_id, availability_status: 'Rented' } }),
+      Property.count({ where: { owner_id, availability_status: 'Sold' } }),
+      Property.count({ where: { owner_id, verification_status: 'Verified' } })
+    ]);
 
-    const stats = { total: 0, available: 0, rented: 0, sold: 0, unavailable: 0 };
-    propertyStats.forEach((stat) => {
-      const status = stat.availability_status;
-      const count  = parseInt(stat.count);
-      stats.total += count;
-      if (status === 'Available')   stats.available   = count;
-      if (status === 'Rented')      stats.rented      = count;
-      if (status === 'Sold')        stats.sold        = count;
-      if (status === 'Unavailable') stats.unavailable = count;
-    });
+    const stats = {
+      total_properties: total,
+      available_short: available,
+      rented_short: rented,
+      sold_short: sold,
+      Verified: verified
+    };
 
     // 1b. Commission summary from completed transactions
     const transactions = await Transaction.findAll({
@@ -81,12 +80,25 @@ exports.getDashboardStats = async (req, res) => {
       where: { owner_id },
       limit: 5,
       order: [['created_at', 'DESC']],
-      include: [{ model: Property, attributes: ['title'] }],
+      include: [{ model: Property, as: 'Property', attributes: ['title'] }],
     });
 
+    // 1e. Consolidate stats
+    const statsData = {
+      total_properties: total,
+      available_short: available,
+      rented_short: rented,
+      sold_short: sold,
+      Verified: verified,
+      totalCommissionToPay: parseFloat(totalCommissionToPay.toFixed(2))
+    };
+
     return successResponse(res, {
-      stats: { ...stats, totalCommissionToPay: parseFloat(totalCommissionToPay.toFixed(2)) },
-      recentActivities: { bookings: recentBookings, transactions: recentTransactions },
+      stats: statsData,
+      recentActivities: { 
+        bookings: recentBookings, 
+        transactions: recentTransactions 
+      },
     }, 'Owner dashboard stats fetched successfully');
 
   } catch (error) {
@@ -107,12 +119,15 @@ exports.getDashboardStats = async (req, res) => {
 exports.getProperties = async (req, res) => {
   try {
     const owner_id = req.user.id;
-    const { status, type, search, page = 1, limit = 10 } = req.query;
+    const { status, type, verification_status, search, page = 1, limit = 10 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const where = { owner_id };
     if (status && status !== 'All') where.availability_status = status;
     if (type   && type   !== 'All') where.listing_type        = type;
+    if (verification_status && verification_status !== 'All') {
+      where.verification_status = verification_status;
+    }
     if (search) {
       where[Op.or] = [
         { title:        { [Op.iLike]: `%${search}%` } },
@@ -476,34 +491,42 @@ exports.addProperty = async (req, res) => {
       description,
       listing_type,
       property_type,
+      city,
       sub_city,
       woreda,
       kebele,
+      house_number,
       specific_location,
       price,
       number_of_bedrooms,
+      bedroom_area_size,
       number_of_bathrooms,
+      bathroom_area_size,
       number_of_living_rooms,
+      living_room_area_size,
       number_of_kitchens,
+      kitchen_area_size,
       number_of_floors,
       area_size,
     } = req.body;
 
     // Strict Backend Validation
-    const requiredFields = ['title', 'description', 'listing_type', 'property_type', 'sub_city', 'specific_location', 'price'];
+    const requiredFields = ['title', 'description', 'listing_type', 'property_type', 'city', 'sub_city', 'specific_location', 'price'];
     const missingFields = requiredFields.filter(field => !req.body[field]);
 
     if (missingFields.length > 0) {
       return errorResponse(res, `Missing required fields: ${missingFields.join(', ')}`, 400);
     }
 
-    const property_image = req.file ? req.file.path : null;
+    const property_image = req.files && req.files.image ? req.files.image[0].path : null;
+    const house_plan_url = req.files && req.files.house_plan ? req.files.house_plan[0].path : null;
 
     if (!property_image) {
       return errorResponse(res, 'Main property image is required', 400);
     }
 
-    const city = owner.city || 'Addis Ababa';
+    // Use selected city from frontend, fallback to owner city
+    const propertyCity = city || owner.city || 'Addis Ababa';
 
     // 2. Auto-assign Agent (least assigned properties in the same city)
     const agents = await User.findAll({
@@ -513,7 +536,7 @@ exports.addProperty = async (req, res) => {
         [Op.and]: [
           Sequelize.where(
             Sequelize.fn('TRIM', Sequelize.col('city')),
-            { [Op.iLike]: city.trim() }
+            { [Op.iLike]: propertyCity.trim() }
           )
         ]
       },
@@ -540,21 +563,68 @@ exports.addProperty = async (req, res) => {
       description,
       listing_type,
       property_type,
-      city,
+      city: propertyCity,
       sub_city,
       woreda,
       kebele,
+      house_number, // Optional
       specific_location,
       price: parseFloat(price) || 0,
       number_of_bedrooms: parseInt(number_of_bedrooms) || 0,
+      bedroom_area_size: parseFloat(bedroom_area_size) || 0,
       number_of_bathrooms: parseInt(number_of_bathrooms) || 0,
+      bathroom_area_size: parseFloat(bathroom_area_size) || 0,
       number_of_living_rooms: parseInt(number_of_living_rooms) || 0,
+      living_room_area_size: parseFloat(living_room_area_size) || 0,
       number_of_kitchens: parseInt(number_of_kitchens) || 0,
+      kitchen_area_size: parseFloat(kitchen_area_size) || 0,
       number_of_floors: parseInt(number_of_floors) || 0,
       area_size: parseFloat(area_size) || 0,
       property_image,
       availability_status: 'Unavailable', // Always Unavailable until approved/active
     });
+
+    // 4. Create Property Document if house_plan uploaded
+    if (house_plan_url) {
+      try {
+        await PropertyDocument.create({
+          property_id: property.property_id,
+          house_plan_url: house_plan_url,
+          uploaded_by: owner_id,
+          is_verified: false,
+          verified_by: null,
+          verified_at: null
+        });
+      } catch (docErr) {
+        console.warn('⚠️ PropertyDocument creation failed, but property was created:', docErr.message);
+        // We don't fail the whole request if the optional document fails
+      }
+    }
+
+    // 5. Notify City Land Managers
+    const landManagers = await User.findAll({
+      where: {
+        role: 'Land_Manager',
+        status: 'Active',
+        [Op.and]: [
+          Sequelize.where(
+            Sequelize.fn('TRIM', Sequelize.col('city')),
+            { [Op.iLike]: propertyCity.trim() }
+          )
+        ]
+      },
+      attributes: ['user_id']
+    });
+
+    for (const lm of landManagers) {
+      await NotificationService.sendInAppNotification(
+        lm.user_id,
+        'New Property Listed',
+        `A new property "${title}" has been listed in your city (${propertyCity}) and is pending moderation.`,
+        'Property',
+        property.property_id
+      );
+    }
 
     return successResponse(res, {
       property,
@@ -562,7 +632,15 @@ exports.addProperty = async (req, res) => {
     }, 'Property listed successfully and is pending approval', 201);
 
   } catch (error) {
-    console.error('[Owner] addProperty Error:', error);
+    console.error('❌ [Owner] addProperty Full Error Object:', JSON.stringify(error, null, 2));
+    console.error('❌ Error Message:', error.message);
+    
+    // Check for specific Sequelize errors
+    if (error.name === 'SequelizeValidationError') {
+      const details = error.errors.map(e => e.message).join(', ');
+      return errorResponse(res, `Validation Error: ${details}`, 400);
+    }
+    
     return errorResponse(res, 'Failed to create listing', 500, error.message);
   }
 };
@@ -783,7 +861,8 @@ exports.updateProperty = async (req, res) => {
     delete updateData.property_id;
     delete updateData.owner_id;
     delete updateData.agent_id;
-    delete updateData.city;         // READ-ONLY
+    delete updateData.city;
+    delete updateData.sub_city;
     delete updateData.created_at;
     delete updateData.updated_at;
 
@@ -823,7 +902,17 @@ exports.getOffers = async (req, res) => {
       include: [
         {
           model: Property,
-          attributes: ['title', 'property_image', 'price', 'listing_type', 'city', 'sub_city', 'agent_id', 'property_id']
+          attributes: ['title', 'property_image', 'price', 'listing_type', 'city', 'sub_city', 'agent_id', 'property_id'],
+        },
+        {
+          model: User,
+          as: 'agent',
+          attributes: ['first_name', 'last_name', 'phone_number', 'email']
+        },
+        {
+          model: User,
+          as: 'buyerRenter',
+          attributes: ['first_name', 'last_name', 'phone_number', 'email']
         }
       ],
       order: [['created_at', 'DESC']]
@@ -982,7 +1071,7 @@ exports.getCommissions = async (req, res) => {
         {
           model: Transaction,
           attributes: ['transaction_id', 'agreed_price', 'transaction_type', 'contract_date'],
-          include: [{ model: Property, attributes: ['property_id', 'title', 'city', 'sub_city', 'property_image'] }]
+          include: [{ model: Property, as: 'Property', attributes: ['property_id', 'title', 'city', 'sub_city', 'property_image'] }]
         },
         {
           model: User,
@@ -1041,13 +1130,15 @@ exports.payCommission = async (req, res) => {
       return errorResponse(res, 'This commission is already paid.', 400);
     }
 
-    // 2. Create Payment Record (Set to Processing or Completed for simulation)
     const payment = await Payment.create({
       transaction_id: commission.transaction_id,
+      commission_id: commission.commission_id,
+      payer_id: owner_id,
+      payment_purpose: 'Commission_Payment',
+      payment_type: payment_method || 'Bank Transfer',
       amount: commission.amount,
-      payment_method,
-      payment_status: 'Completed', // For production, this would be 'Processing' until webhook/confirmation
-      payment_date: new Date()
+      payment_status: 'Completed',
+      description: `Owner paid commission for transaction ${commission.transaction_id} via ${payment_method}`
     }, { transaction: t });
 
     // 3. Update Commission Status
@@ -1071,6 +1162,91 @@ exports.payCommission = async (req, res) => {
     if (t && !t.finished) await t.rollback();
     console.error('[Owner] payCommission Error:', error);
     return errorResponse(res, 'Failed to process payment', 500, error.message);
+  }
+};
+
+/**
+ * Get Offers (Owner_Pending bookings)
+ */
+exports.getOffers = async (req, res) => {
+  try {
+    const owner_id = req.user.id;
+    const { status } = req.query;
+
+    const where = { 
+      owner_id,
+      booking_status: status || ['Owner_Pending', 'Negotiating']
+    };
+
+    const offers = await Booking.findAll({
+      where,
+      include: [
+        { model: Property, attributes: ['title', 'price', 'property_image', 'listing_type'] },
+        { model: User, as: 'buyerRenter', attributes: ['first_name', 'last_name', 'phone_number'] }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    return successResponse(res, offers, 'Offers fetched successfully');
+  } catch (error) {
+    console.error('Fetch Owner Offers Error:', error);
+    return errorResponse(res, 'Failed to fetch offers', 500);
+  }
+};
+
+/**
+ * Update Offer Status (Owner Action)
+ */
+exports.updateOfferStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, negotiated_price } = req.body;
+    const owner_id = req.user.id;
+
+    const booking = await Booking.findByPk(id, {
+      include: [{ model: Property, attributes: ['title', 'price', 'listing_type'] }]
+    });
+
+    if (!booking) return errorResponse(res, 'Offer not found', 404);
+    if (booking.owner_id !== owner_id) return errorResponse(res, 'Unauthorized', 403);
+
+    const updateData = { booking_status: status };
+    if (negotiated_price) updateData.negotiated_price = negotiated_price;
+
+    await booking.update(updateData);
+
+    // --- SENIOR LOGIC: Deal Closure Flow ---
+    if (status === 'Approved') {
+      const { Transaction } = require('../models/associations');
+      
+      // Create Pending Transaction (Agreement)
+      await Transaction.create({
+        property_id: booking.property_id,
+        booking_id: booking.booking_id,
+        owner_id: owner_id,
+        agent_id: booking.agent_id,
+        buyer_renter_id: booking.buyer_renter_id,
+        transaction_type: booking.listing_type,
+        agreed_price: negotiated_price || booking.Property.price,
+        contract_date: new Date(),
+        transaction_status: 'Pending'
+      });
+    }
+
+    // Notify Agent
+    const NotificationService = require('../services/notification.service');
+    await NotificationService.sendInAppNotification(
+      booking.agent_id,
+      'Offer Updated',
+      `The owner has ${status.toLowerCase()} the offer for "${booking.Property.title}".`,
+      'Booking',
+      booking.booking_id
+    );
+
+    return successResponse(res, booking, `Offer status updated to ${status}`);
+  } catch (error) {
+    console.error('Update Offer Status Error:', error);
+    return errorResponse(res, 'Failed to update offer status', 500);
   }
 };
 

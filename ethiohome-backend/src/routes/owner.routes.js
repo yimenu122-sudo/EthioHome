@@ -10,7 +10,7 @@ const router     = express.Router();
 const ownerController  = require('../controllers/owner.controller');
 const authenticate     = require('../middlewares/auth.middleware');
 const authorize        = require('../middlewares/role.middleware');
-const { handleMultipleUpload } = require('../middlewares/upload.middleware');
+const { handleMultipleUpload, handlePropertyUpload } = require('../middlewares/upload.middleware');
 
 // ─── All owner routes require authentication and Owner role ───────────────────
 router.use(authenticate);
@@ -74,7 +74,7 @@ router.get('/properties', ownerController.getProperties);
  * @body    { title, description, type, price, location, bedrooms, bathrooms, area, amenities, status }
  * @access  Private (Owner)
  */
-router.post('/properties', handleSingleUpload, ownerController.addProperty);
+router.post('/properties', handlePropertyUpload, ownerController.addProperty);
 
 /**
  * @route   PATCH /api/owner/properties/:id/status
@@ -149,18 +149,11 @@ router.patch('/properties/:id/images/:imageId/set-primary', ownerController.setP
 router.get('/offers', ownerController.getOffers);
 
 /**
- * @route   POST /api/owner/offers/:id/approve
- * @desc    Approve an offer (creates transaction & commission)
+ * @route   PATCH /api/owner/offers/:id
+ * @desc    Approve, Reject, or Negotiate an offer
  * @access  Private (Owner)
  */
-router.post('/offers/:id/approve', ownerController.approveOffer);
-
-/**
- * @route   POST /api/owner/offers/:id/reject
- * @desc    Reject an offer
- * @access  Private (Owner)
- */
-router.post('/offers/:id/reject', ownerController.rejectOffer);
+router.patch('/offers/:id', ownerController.updateOfferStatus);
 
 
 // ─────────────────────────────────────────────────────────────────────────────

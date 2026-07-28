@@ -1,4 +1,5 @@
-const { Transaction, Property, Booking, Payment, Commission, PropertyImage } = require('../models/associations');
+const { Transaction, Property, Booking, Payment, Commission, PropertyImage, User, SystemSetting } = require('../models/associations');
+const { sequelize } = require('../config/db');
 const { successResponse, errorResponse } = require('../utils/response');
 
 /**
@@ -7,9 +8,8 @@ const { successResponse, errorResponse } = require('../utils/response');
  */
 
 exports.createTransaction = async (req, res) => {
-    const t = await sequelize.transaction();
     try {
-        const { property_id, booking_id, agreed_price, transaction_type } = req.body;
+        const { property_id, booking_id, agreed_price, transaction_type, buyer_renter_id } = req.body;
 
         // 1. Validate property
         const property = await Property.findByPk(property_id);
@@ -21,66 +21,138 @@ exports.createTransaction = async (req, res) => {
         // 2. Validate booking
         const booking = await Booking.findByPk(booking_id);
         if (!booking) return errorResponse(res, 'Booking not found', 404);
-        if (booking.booking_status !== 'Approved') {
-            return errorResponse(res, 'Booking must be approved before transaction', 400);
-        }
 
-        // 3. Create Transaction
+        // 3. Create Transaction (Initially Pending)
         const transaction = await Transaction.create({
             property_id,
             booking_id,
             owner_id: property.owner_id,
             agent_id: property.agent_id,
+            buyer_renter_id: buyer_renter_id || booking.buyer_renter_id,
             transaction_type: transaction_type || property.listing_type,
             agreed_price,
             contract_date: new Date(),
-            transaction_status: 'Completed'
-        }, { transaction: t });
+            transaction_status: 'Pending'
+        });
 
-        // 4. Update Property Status
-        await property.update({ 
-            availability_status: transaction_type === 'Sale' ? 'Sold' : 'Rented' 
-        }, { transaction: t });
+        return successResponse(res, transaction, 'Pending agreement generated', 201);
 
-        // 5. Calculate Commission (Sale: 2% from BOTH, Rent: 9% from BOTH)
-        const settings = await SystemSetting.findOne({ where: { key: 'rent_sale_split' } });
-        const rates = settings ? settings.value : { sale: 2, rent: 9 };
-        
-        const rate = transaction_type === 'Sale' ? rates.sale : rates.rent;
-        const perPartyCommission = agreed_price * (rate / 100);
-        const totalCommissionEarned = perPartyCommission * 2; // Both pay
+    } catch (error) {
+        console.error('Create Transaction Error:', error);
+        return errorResponse(res, 'Failed to generate agreement', 500, error.message);
+    }
+};
 
-        // 6. Record Payment (The commission or full price? Schema shows payment linked to transaction)
-        // Usually, the portal tracks the commission payment.
-        await Payment.create({
-            transaction_id: transaction.transaction_id,
-            amount: commissionAmount,
-            payment_method: 'Bank',
-            payment_status: 'Pending',
-            payment_date: new Date()
-        }, { transaction: t });
+/**
+ * Confirm Agreement (Renter/Buyer Action)
+ * Atomically completes the full deal closure workflow:
+ *   1. Transaction  → status = 'Completed'
+ *   2. Property     → availability_status = 'Rented' | 'Sold'
+ *   3. Booking      → booking_status = 'Completed'
+ *   4. Commission   → new record with calculated amount
+ */
+exports.confirmAgreement = async (req, res) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const userId = req.user.id;
 
-        // 7. Record Commission record for Agent for the TOTAL amount earned from both sides
-        if (property.agent_id) {
-            await Commission.create({
-                transaction_id: transaction.transaction_id,
-                booking_id: booking.booking_id,
-                owner_id: property.owner_id,
-                agent_id: property.agent_id,
-                amount: totalCommissionEarned,
-                commission_status: 'Pending'
-            }, { transaction: t });
+        // Load transaction with associated property
+        const txn = await Transaction.findByPk(id, {
+            include: [{ model: Property, as: 'property' }]
+        });
+
+        if (!txn) return errorResponse(res, 'Agreement not found', 404);
+
+        // Authorization: only the buyer/renter for this deal can confirm
+        if (txn.buyer_renter_id !== userId) {
+            return errorResponse(res, 'Unauthorized to confirm this agreement', 403);
         }
 
+        if (txn.transaction_status !== 'Pending') {
+            return errorResponse(res, 'Agreement is not in a pending state', 400);
+        }
+
+        const isRent = txn.transaction_type === 'Rent';
+
+        // ── 1. Mark Transaction as Completed ──────────────────────────────────
+        await txn.update({ transaction_status: 'Completed' }, { transaction: t });
+
+        // ── 2. Update Property Availability ──────────────────────────────────
+        const property = txn.property;
+        if (property) {
+            await property.update(
+                { availability_status: isRent ? 'Rented' : 'Sold' },
+                { transaction: t }
+            );
+        }
+
+        // ── 3. Mark Booking as Completed ──────────────────────────────────────
+        const booking = await Booking.findByPk(txn.booking_id);
+        if (booking) {
+            await booking.update({ booking_status: 'Completed' }, { transaction: t });
+        }
+
+        // ── 4. Calculate & Record Commission ─────────────────────────────────
+        // Fetch commission rate from system settings (fallback: 9% Rent, 2% Sale)
+        const settings = await SystemSetting.findOne({ where: { key: 'rent_sale_split' } });
+        const rates = (settings && settings.value) ? settings.value : { sale: 2, rent: 9 };
+
+        const rate = isRent ? rates.rent : rates.sale;
+        // Total commission = both parties pay (buyer/renter + owner share)
+        const perPartyAmount = parseFloat(txn.agreed_price) * (rate / 100);
+        const totalCommission = perPartyAmount * 2;
+
+        // Always create commission record — regardless of whether agent exists
+        await Commission.create({
+            transaction_id:  txn.transaction_id,
+            booking_id:      txn.booking_id,
+            owner_id:        txn.owner_id,
+            agent_id:        txn.agent_id || null,
+            buyer_renter_id: txn.buyer_renter_id,
+            amount:          totalCommission,
+            commission_status: 'Pending'
+        }, { transaction: t });
+
+        // ── 5. Create Pending Payment Record for Buyer/Renter ────────────────
+        await Payment.create({
+            transaction_id: txn.transaction_id,
+            property_id: txn.property_id,
+            booking_id: txn.booking_id,
+            payer_id: txn.buyer_renter_id,
+            payee_id: txn.owner_id,
+            payment_purpose: isRent ? 'Guarantee_Deposit' : 'Property_Payment',
+            payment_type: 'Platform Gateway',
+            amount: txn.agreed_price,
+            payment_status: 'Pending',
+            description: isRent ? 'Guarantee Deposit for Rent' : 'Full Property Payment for Sale'
+        }, { transaction: t });
+
         await t.commit();
-        return successResponse(res, transaction, 'Transaction completed successfully', 201);
+
+        console.log(`✅ Deal closed — ${isRent ? 'Rent' : 'Sale'} | TXN: ${txn.transaction_id} | Commission: ${totalCommission} ETB`);
+
+        return successResponse(res, {
+            transaction_id: txn.transaction_id,
+            transaction_type: txn.transaction_type,
+            transaction_status: 'Completed',
+            property_status: isRent ? 'Rented' : 'Sold',
+            booking_status: 'Completed',
+            commission: {
+                rate: `${rate}%`,
+                per_party: perPartyAmount,
+                total: totalCommission,
+                status: 'Pending'
+            }
+        }, 'Agreement confirmed successfully');
 
     } catch (error) {
         await t.rollback();
-        console.error('Transaction Error:', error);
-        return errorResponse(res, 'Transaction failed', 500, error.message);
+        console.error('Confirm Agreement Error:', error);
+        return errorResponse(res, 'Failed to confirm agreement', 500, error.message);
     }
 };
+
 
 exports.getMyTransactions = async (req, res) => {
     try {
@@ -91,8 +163,28 @@ exports.getMyTransactions = async (req, res) => {
             { 
                 model: Property, 
                 as: 'property',
-                attributes: ['title', 'city', 'price'],
+                attributes: ['property_id', 'title', 'city', 'sub_city', 'price', 'listing_type', 'property_image'],
                 include: [{ model: PropertyImage, as: 'images', limit: 1 }]
+            },
+            {
+                model: User,
+                as: 'owner',
+                attributes: ['first_name', 'last_name', 'phone_number', 'email']
+            },
+            {
+                model: User,
+                as: 'buyerRenter',
+                attributes: ['first_name', 'last_name', 'phone_number', 'email']
+            },
+            {
+                model: Commission,
+                as: 'Commission',
+                attributes: ['commission_id', 'amount', 'commission_status']
+            },
+            {
+                model: User,
+                as: 'Agent',
+                attributes: ['first_name', 'last_name', 'phone_number', 'email', 'profile_image']
             }
         ];
 
@@ -102,13 +194,7 @@ exports.getMyTransactions = async (req, res) => {
         } else if (role === 'Agent') {
             where.agent_id = userId;
         } else {
-            // Buyer/Renter: Join via Booking
-            include.push({
-                model: Booking,
-                where: { buyer_renter_id: userId },
-                required: true,
-                attributes: []
-            });
+            where.buyer_renter_id = userId;
         }
         
         const transactions = await Transaction.findAll({
@@ -117,7 +203,19 @@ exports.getMyTransactions = async (req, res) => {
             order: [['created_at', 'DESC']]
         });
 
-        return successResponse(res, transactions, 'Transactions fetched successfully');
+        // Fetch commission rates
+        const settings = await SystemSetting.findOne({ where: { key: 'rent_sale_split' } });
+        const rates = settings ? settings.value : { sale: 2, rent: 9 };
+
+        const enrichedTransactions = transactions.map(t => {
+            const rate = t.transaction_type === 'Sale' ? rates.sale : rates.rent;
+            const transactionObj = t.toJSON();
+            transactionObj.commission_rate = rate;
+            transactionObj.commission_value = (transactionObj.agreed_price * rate) / 100;
+            return transactionObj;
+        });
+
+        return successResponse(res, enrichedTransactions, 'Transactions fetched successfully');
     } catch (error) {
         console.error('Get My Transactions Error:', error);
         return errorResponse(res, 'Failed to fetch transactions', 500);

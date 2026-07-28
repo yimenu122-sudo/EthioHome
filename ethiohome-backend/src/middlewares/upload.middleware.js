@@ -79,13 +79,13 @@ if (!usingCloudinary) {
 const uploadSingle = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15 MB
 }).single('image');
 
 const uploadMultiple = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 },
+  limits: { fileSize: 15 * 1024 * 1024 },
 }).array('images', 8);
 
 // ─── Path Normaliser (disk-storage only) ─────────────────────────────────────
@@ -136,4 +136,31 @@ const handleMultipleUpload = (req, res, next) => {
   });
 };
 
-module.exports = { handleSingleUpload, handleMultipleUpload };
+const uploadProperty = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 15 * 1024 * 1024 },
+}).fields([
+  { name: 'image', maxCount: 1 },
+  { name: 'house_plan', maxCount: 1 }
+]);
+
+const handlePropertyUpload = (req, res, next) => {
+  uploadProperty(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
+    }
+    if (err) {
+      const msg = typeof err === 'string' ? err : (err.message || 'Unknown upload error');
+      return res.status(400).json({ success: false, message: msg });
+    }
+    // Normalise paths for disk storage
+    if (req.files) {
+      if (req.files.image) req.files.image.forEach(normaliseFilePath);
+      if (req.files.house_plan) req.files.house_plan.forEach(normaliseFilePath);
+    }
+    next();
+  });
+};
+
+module.exports = { handleSingleUpload, handleMultipleUpload, handlePropertyUpload };

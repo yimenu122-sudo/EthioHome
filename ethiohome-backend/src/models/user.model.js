@@ -27,7 +27,7 @@ class UserModel {
       userData.phone_number,
       userData.email,
       userData.national_id,
-      userData.city || 'Addis Ababa',
+      userData.city,
       userData.password_hash || null,
       userData.role || 'Renter',
       userData.preferred_language || 'English',
@@ -65,6 +65,14 @@ class UserModel {
     return rows[0];
   }
 
+  static async findById(id) {
+    const { rows } = await pool.query(
+      `SELECT * FROM users WHERE user_id = $1`,
+      [id]
+    );
+    return rows[0];
+  }
+
   static async findByPhone(phone) {
     const { rows } = await pool.query(
       `SELECT * FROM users WHERE phone_number = $1`,
@@ -90,12 +98,18 @@ class UserModel {
   }
 
   static async findByIdentifier(identifier) {
+    // Basic normalization for Ethiopian phone numbers
+    let phoneSearch = identifier;
+    if (identifier && /^(09|07)\d{8}$/.test(identifier)) {
+      phoneSearch = '+251' + identifier.substring(1);
+    }
+
     const query = `
       SELECT * FROM users 
-      WHERE phone_number = $1 OR email = $2
+      WHERE phone_number = $1 OR phone_number = $2 OR email = $3
       LIMIT 1;
     `;
-    const { rows } = await pool.query(query, [identifier, identifier]);
+    const { rows } = await pool.query(query, [identifier, phoneSearch, identifier]);
     return rows[0];
   }
 

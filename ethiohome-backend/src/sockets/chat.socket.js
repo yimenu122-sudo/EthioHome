@@ -1,6 +1,6 @@
 /**
  * @file chat.socket.js
- * @description Real-time chat engine for EthioHome using Socket.io
+ * @description Real-time chat engine for EthioHome based ONLY on chat_messages table
  */
 
 const { verifyToken } = require('../config/jwt');
@@ -9,7 +9,6 @@ const { pool } = require('../config/db');
 module.exports = (io) => {
   /**
    * 1️⃣ AUTHENTICATION MIDDLEWARE
-   * Verifies JWT before allowing socket connection
    */
   io.use((socket, next) => {
     const token = socket.handshake.auth.token || socket.handshake.query.token;
@@ -23,83 +22,66 @@ module.exports = (io) => {
       return next(new Error('Authentication error: Invalid token'));
     }
 
-    // Attach user info to socket
     socket.user = decoded;
     next();
   });
 
   io.on('connection', (socket) => {
-    console.log(`✅ User Connected: ${socket.user.id} (${socket.user.role})`);
+    console.log(`✅ User Connected: ${socket.user.id}`);
 
-    /**
-     * 2️⃣ JOIN PERSONAL ROOM
-     * Each user joins a room named after their ID for private messaging
-     */
+    // Join personal room
     socket.join(socket.user.id);
 
     /**
-     * 3️⃣ SEND MESSAGE HANDLER
+     * 2️⃣ SEND MESSAGE HANDLER
      */
     socket.on('send_message', async (data) => {
       try {
-        const { receiver_id, message, conversation_id } = data;
+        const { receiver_id, message, image_url } = data;
         const sender_id = socket.user.id;
 
-        // 1. Persist message to PostgreSQL
+        if (!receiver_id) throw new Error('Receiver ID missing');
+
+        // Persist message to PostgreSQL (No conversation_id)
         const msgQuery = `
-          INSERT INTO chat_messages (conversation_id, sender_id, receiver_id, message, image_url)
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO chat_messages (sender_id, receiver_id, message, image_url)
+          VALUES ($1, $2, $3, $4)
           RETURNING *;
         `;
-        const { rows } = await pool.query(msgQuery, [conversation_id, sender_id, receiver_id, message, data.image_url || null]);
+        const { rows } = await pool.query(msgQuery, [sender_id, receiver_id, message, image_url || null]);
         const savedMessage = rows[0];
 
-        // 2. Update conversation last message
-        const convQuery = `
-          UPDATE conversations 
-          SET last_message = $1, last_message_at = NOW(), updated_at = NOW()
-          WHERE conversation_id = $2;
-        `;
-        await pool.query(convQuery, [message, conversation_id]);
-
-        // 3. Emit to receiver in real-time
+        // Emit to receiver
         io.to(receiver_id).emit('receive_message', savedMessage);
         
-        // 4. Acknowledge back to sender
+        // Acknowledge back to sender
         socket.emit('message_sent', savedMessage);
 
       } catch (error) {
-        console.error('❌ Chat Error:', error.message);
+        console.error('❌ Chat Socket Error:', error.message);
         socket.emit('error', { message: 'Failed to send message' });
       }
     });
 
     /**
-     * 4️⃣ MARK AS READ HANDLER
+     * 3️⃣ MARK CONVERSATION AS READ
      */
     socket.on('mark_read', async (data) => {
       try {
-        const { message_id } = data;
+        const { partner_id } = data;
         const updateQuery = `
           UPDATE chat_messages 
           SET is_read = true, read_at = NOW()
-          WHERE message_id = $1 AND receiver_id = $2
-          RETURNING *;
+          WHERE sender_id = $1 AND receiver_id = $2 AND is_read = false;
         `;
-        await pool.query(updateQuery, [message_id, socket.user.id]);
-        
-        // Notify sender that message was read
-        // (Optional logic to find sender and emit)
+        await pool.query(updateQuery, [partner_id, socket.user.id]);
       } catch (error) {
         console.error('❌ Read Status Error:', error.message);
       }
     });
 
-    /**
-     * 5️⃣ DISCONNECT HANDLER
-     */
     socket.on('disconnect', () => {
-      console.log(`👋 User Disconnected: ${socket.user.id}`);
+      console.log(`❌ User Disconnected: ${socket.user.id}`);
     });
   });
 };

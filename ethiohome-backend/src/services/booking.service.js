@@ -17,6 +17,7 @@ class BookingService {
 
     return await Booking.create({
       ...data,
+      negotiated_price: property.price,
       booking_status: 'Pending'
     });
   }

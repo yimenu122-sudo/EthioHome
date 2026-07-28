@@ -11,6 +11,7 @@ router.get('/audit-logs/recent', adminController.getRecentAuditLogs);
 
 // User Management
 router.get('/users', adminController.getUsers);
+router.get('/users/export', adminController.exportUsersCSV);
 router.put('/users/:id/status', adminController.updateUserStatus);
 router.put('/users/:id/role', adminController.updateUserRole);
 router.get('/users/:id/details', adminController.getUserDetails);
@@ -42,6 +43,19 @@ router.post('/disputes/:id/resolve', adminController.resolveDispute);
 router.get('/settings', adminController.getSystemSettings);
 router.put('/settings', adminController.updateSystemSettings);
 router.post('/maintenance/backup', adminController.runSystemBackup);
+
+const transactionAdminController = require('../controllers/admin/transaction.admin.controller');
+
+// ... other routes ...
+
+// Transaction Management
+// NOTE: Static/export routes MUST come before /:id param routes
+router.get('/transactions', transactionAdminController.getTransactions);
+router.get('/transactions/analytics', transactionAdminController.getTransactionAnalytics);
+router.get('/transactions/export/csv', transactionAdminController.exportCSV);
+router.get('/transactions/export/excel', transactionAdminController.exportExcel);
+router.patch('/transactions/:id/status', transactionAdminController.updateStatus);
+router.post('/transactions/:id/recalculate-commission', transactionAdminController.recalculateCommission);
 
 // City Management (City Expansion)
 router.get('/cities', cityAdminController.getAllCities);

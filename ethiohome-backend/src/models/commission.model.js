@@ -21,7 +21,11 @@ const Commission = sequelize.define('Commission', {
   },
   agent_id: {
     type: DataTypes.UUID,
-    allowNull: false
+    allowNull: true  // null when owner deals directly without an agent
+  },
+  buyer_renter_id: {
+    type: DataTypes.UUID,
+    allowNull: true  // the buyer (Sale) or renter (Rent) paying the commission
   },
   amount: {
     type: DataTypes.DECIMAL(12, 2),

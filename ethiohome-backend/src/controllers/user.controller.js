@@ -52,6 +52,28 @@ exports.updateProfile = async (req, res) => {
 };
 
 /**
+ * Upload profile image
+ */
+exports.uploadProfileImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return errorResponse(res, 'No image file provided', 400);
+    }
+
+    const user = await User.findByPk(req.user.id);
+    if (!user) return errorResponse(res, 'User not found', 404);
+
+    // Update profile_image with the path (URL provided by handleSingleUpload middleware)
+    await user.update({ profile_image: req.file.path });
+
+    return successResponse(res, user, 'Profile image updated successfully');
+  } catch (error) {
+    console.error('Upload Profile Image Error:', error);
+    return errorResponse(res, 'Upload failed', 500);
+  }
+};
+
+/**
  * Update language preference
  */
 exports.updateLanguage = async (req, res) => {

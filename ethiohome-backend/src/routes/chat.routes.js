@@ -10,8 +10,12 @@ const router = express.Router();
 // For now, let's assume chat.controller exists as per the structure
 const chatController = require('../controllers/chat.controller'); 
 const auth = require('../middlewares/auth.middleware');
+const { handleSingleUpload } = require('../middlewares/upload.middleware');
 
 router.use(auth);
+
+// Upload chat image
+router.post('/upload', handleSingleUpload, chatController.uploadChatImage);
 
 // Get list of conversations for the current user
 router.get('/conversations', chatController.getConversations);
